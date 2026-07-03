@@ -46,6 +46,7 @@ class AZMCTS:
         dirichlet_alpha: float = 0.3,
         dirichlet_frac: float = 0.25,
         rng: np.random.Generator | None = None,
+        solve_children: bool = False,
     ):
         self.evaluator = evaluator
         self.n_sims = n_sims
@@ -53,6 +54,7 @@ class AZMCTS:
         self.dirichlet_alpha = dirichlet_alpha
         self.dirichlet_frac = dirichlet_frac
         self.rng = rng or np.random.default_rng()
+        self.solve_children = solve_children
 
     def run(self, root_state, add_noise: bool = False) -> dict[int, int]:
         """Run simulations; return {action: visit_count} at the root."""
@@ -88,12 +90,30 @@ class AZMCTS:
     # --- internals ---
 
     def _expand(self, node: AZNode) -> float:
-        """Attach children with net priors; return the net value of `node`."""
+        """Attach children with net priors; return the net value of `node`.
+
+        With `solve_children`, eagerly check each child for terminality (pure
+        search mechanics — only the generic env interface). A terminal child's
+        exact value is seeded as one visit so selection/targets see it as a
+        proven q instead of a net guess; if any child is an immediate WIN for
+        this node's mover, the node's value is exactly +1 (a win exists), which
+        also makes the refutation of a non-blocking parent move exact on its
+        first expansion. This is what lets Gumbel learn 1-ply tactics at very
+        low sim counts (the whole point of the algorithm).
+        """
         probs, value = self.evaluator.predict(node.state)
+        won = False
         for a in node.state.legal_moves():
-            node.children[a] = AZNode(node.state.apply(a), prior=float(probs[a]))
+            child = AZNode(node.state.apply(a), prior=float(probs[a]))
+            node.children[a] = child
+            if self.solve_children and child.state.is_terminal():
+                tv = float(child.state.result() * child.to_play)  # child's stm view
+                child.n = 1
+                child.w = tv
+                if tv <= -1.0:      # this node's mover wins by playing `a`
+                    won = True
         node.is_expanded = True
-        return value
+        return 1.0 if won else value
 
     def _add_dirichlet_noise(self, root: AZNode) -> None:
         actions = list(root.children)

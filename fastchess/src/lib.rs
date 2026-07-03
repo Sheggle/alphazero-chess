@@ -14,6 +14,8 @@ use shakmaty::{
 use shakmaty::fen::Fen;
 
 mod arena;
+mod c4selfplay;
+mod connect4;
 mod selfplay;
 
 const N: u8 = 2; // knight  (python-chess piece-type ints)
@@ -604,15 +606,83 @@ fn encode_batch<'py>(
     Ok(PyArray1::from_vec_bound(py, buf).reshape([n, N_PLANES, 8, 8])?)
 }
 
+// ---- Score-Four (3D Connect 4) pyo3 bindings around the pure `connect4` core.
+// The wall-clock deadline lives here (native only); the core takes it as a
+// closure so it stays wasm-safe. Scores cross the FFI as floats (1.0 = W3;
+// mate = +/-(100_000 - plies)). `threads > 1` uses lazy SMP over the shared
+// lock-free TT; the GIL is released for the duration of the search.
+#[pyfunction]
+#[pyo3(signature = (board_flat, to_play, time_ms, w1, w2, threads=1))]
+fn c4_best_move(
+    py: Python<'_>,
+    board_flat: Vec<i8>,
+    to_play: i8,
+    time_ms: u64,
+    w1: f64,
+    w2: f64,
+    threads: usize,
+) -> PyResult<(i32, i32, u64, f64)> {
+    if board_flat.len() != 64 {
+        return Err(pyo3::exceptions::PyValueError::new_err("board_flat must be length 64"));
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(time_ms);
+    let (col, depth, nodes, sc) = py.allow_threads(move || {
+        if threads > 1 {
+            connect4::search_smp(&board_flat, to_play, w1, w2, threads, 22, move |_| {
+                std::time::Instant::now() >= deadline
+            })
+        } else {
+            let mut eng = connect4::C4::from_board(&board_flat, to_play, w1, w2);
+            eng.set_stop_fn(Box::new(move |_| std::time::Instant::now() >= deadline));
+            eng.search_id()
+        }
+    });
+    Ok((col, depth, nodes, connect4::score_to_f64(sc)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (board_flat, to_play, depth, w1, w2))]
+fn c4_best_move_depth(
+    py: Python<'_>,
+    board_flat: Vec<i8>,
+    to_play: i8,
+    depth: i32,
+    w1: f64,
+    w2: f64,
+) -> PyResult<(i32, i32, u64, f64)> {
+    if board_flat.len() != 64 {
+        return Err(pyo3::exceptions::PyValueError::new_err("board_flat must be length 64"));
+    }
+    let (col, d, nodes, sc) = py.allow_threads(move || {
+        let mut eng = connect4::C4::from_board(&board_flat, to_play, w1, w2);
+        eng.search_depth(depth)
+    });
+    Ok((col, d, nodes, connect4::score_to_f64(sc)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (board_flat, to_play, w1, w2))]
+fn c4_eval(board_flat: Vec<i8>, to_play: i8, w1: f64, w2: f64) -> PyResult<f64> {
+    if board_flat.len() != 64 {
+        return Err(pyo3::exceptions::PyValueError::new_err("board_flat must be length 64"));
+    }
+    let eng = connect4::C4::from_board(&board_flat, to_play, w1, w2);
+    Ok(eng.static_eval() as f64 / connect4::SCALE as f64)
+}
+
 #[pymodule]
 fn fastchess(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Board>()?;
     m.add_function(wrap_pyfunction!(encode_batch, m)?)?;
     m.add_function(wrap_pyfunction!(selfplay::run_selfplay, m)?)?;
+    m.add_function(wrap_pyfunction!(c4selfplay::c4_run_selfplay, m)?)?;
     m.add_function(wrap_pyfunction!(arena::arena_match, m)?)?;
     m.add_function(wrap_pyfunction!(arena::arena_match_openings, m)?)?;
     m.add_function(wrap_pyfunction!(arena::arena_bench, m)?)?;
     m.add_function(wrap_pyfunction!(arena::search_position, m)?)?;
+    m.add_function(wrap_pyfunction!(c4_best_move, m)?)?;
+    m.add_function(wrap_pyfunction!(c4_best_move_depth, m)?)?;
+    m.add_function(wrap_pyfunction!(c4_eval, m)?)?;
     let _ = (N, B, R, Q);
     Ok(())
 }

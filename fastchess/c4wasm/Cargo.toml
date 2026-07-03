@@ -1,0 +1,21 @@
+[package]
+name = "c4wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Score-Four (3D Connect 4) alpha-beta engine compiled to WebAssembly"
+
+# Own workspace root so cargo does not try to attach this to the parent
+# `fastchess` package directory.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

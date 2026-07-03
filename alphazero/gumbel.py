@@ -40,8 +40,10 @@ class GumbelMCTS(AZMCTS):
         c_scale: float = 1.0,
         c_puct: float = 1.5,
         rng: np.random.Generator | None = None,
+        solve_children: bool = False,
     ):
-        super().__init__(evaluator, n_sims=n_sims, c_puct=c_puct, rng=rng)
+        super().__init__(evaluator, n_sims=n_sims, c_puct=c_puct, rng=rng,
+                         solve_children=solve_children)
         self.max_considered = max_considered
         self.c_visit = c_visit
         self.c_scale = c_scale
@@ -76,6 +78,19 @@ class GumbelMCTS(AZMCTS):
         gpref = {legal[i]: gumbel[i] + logits[i] for i in range(len(legal))}
 
         self._sequential_halving(root, considered, gpref)
+
+        # Proven-win short-circuit: if a root move is an immediate terminal win,
+        # the optimal policy IS that move — game-theoretically exact, so both the
+        # target and the action concentrate on it (no softmax dilution by priors
+        # or by siblings' inflated net values).
+        if self.solve_children:
+            proven = [a for a in legal
+                      if root.children[a].state.is_terminal()
+                      and root.children[a].state.result() * root_state.to_play > 0]
+            if proven:
+                pi = np.zeros(root_state.action_size, dtype=np.float32)
+                pi[proven] = 1.0 / len(proven)
+                return proven[0], pi
 
         improved = self._completed_policy(root, root_state, root_value, logits, legal)
 

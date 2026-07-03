@@ -53,7 +53,8 @@ def play_game(evaluator, sims, mc, c_visit, c_scale, rng, max_ply=64):
     recs = []
     while not g.is_terminal() and g.ply < max_ply:
         a, pi = GumbelMCTS(evaluator, n_sims=sims, max_considered=mc,
-                           c_visit=c_visit, c_scale=c_scale, rng=rng).run(g, add_noise=True)
+                           c_visit=c_visit, c_scale=c_scale, rng=rng,
+                           solve_children=True).run(g, add_noise=True)
         recs.append((encode_state(g), pi, g.to_play))
         g = g.apply(int(a))
 
@@ -103,7 +104,11 @@ class Connect4Config:
     n_workers: int = 6                  # <=1 runs self-play inline (no process pool)
     sims: int = 32
     eval_sims: int = 0                  # 0 -> use `sims`; else stronger eval search
-    max_considered: int = 8
+    max_considered: int = 16            # = ACTION_SIZE: consider EVERY column at the
+                                        # root. With a 16-action game, a narrower set
+                                        # (Gumbel-top-k by prior) can exclude a low-
+                                        # prior *winning* move so search can never
+                                        # play it — and self-play never reinforces it.
     max_ply: int = 64
     c_visit: float = 50.0
     c_scale: float = 0.3
@@ -119,6 +124,7 @@ class Connect4Config:
     seed: int = 0
     device: str = "cpu"
     train_threads: int = 4
+    resume: bool = False               # warm-start from ckpt_dir/latest.pt if present
 
 
 # ------------------------------------------------------------- eval players
@@ -152,7 +158,7 @@ class _TacticAgent:
 
 def _greedy_move(evaluator, state, sims, mc, rng):
     a, _ = GumbelMCTS(evaluator, n_sims=sims, max_considered=mc,
-                      rng=rng).run(state, add_noise=False)
+                      rng=rng, solve_children=True).run(state, add_noise=False)
     return int(a)
 
 
@@ -193,6 +199,13 @@ def train(cfg: Connect4Config):
     metrics_path = ckpt_dir / "metrics.jsonl"
 
     net = Connect4Net(channels=cfg.channels, blocks=cfg.blocks).to(cfg.device)
+    # Resume from the last checkpoint in this ckpt_dir if one exists (warm start;
+    # optimizer state is reset, which is fine for Adam).
+    latest = ckpt_dir / "latest.pt"
+    if getattr(cfg, "resume", False) and latest.exists():
+        ck = torch.load(latest, map_location=cfg.device, weights_only=False)
+        net.load_state_dict(ck["state_dict"])
+        print(f"resumed from {latest} (iter {ck.get('iter')})", flush=True)
     opt = torch.optim.Adam(net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     buffer: deque = deque(maxlen=cfg.buffer_size)
 
@@ -312,17 +325,34 @@ def train(cfg: Connect4Config):
 
 
 def _config(mode: str) -> Connect4Config:
+    if mode == "local":
+        # Mac-local solver run (M2, user active): fewer workers, smaller batches.
+        return Connect4Config(
+            channels=48, blocks=4, iterations=400, resume=False,
+            games_per_iter=80, n_workers=5, sims=64, eval_sims=64, max_considered=16,
+            buffer_size=200000, batch_size=512, train_steps=200,
+            lr=2e-3, entropy_coef=0.01, eval_every=5, eval_games=40,
+            device="mps", ckpt_dir="models/connect4_solver", seed=0,
+        )
     if mode == "smoke":
         return Connect4Config(channels=32, blocks=3, iterations=12, games_per_iter=24,
-                              n_workers=1, sims=24, eval_sims=96, max_considered=8,
+                              n_workers=1, sims=64, eval_sims=64, max_considered=16,
                               train_steps=60, batch_size=128, eval_every=3, eval_games=30,
                               ckpt_dir="models/connect4_smoke")
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # NOTE on sims: this game's key tactic (blocking an opponent's immediate win)
+    # is a 2-ply refutation. FIXED via solve_children in the generic search
+    # (az_mcts._expand + gumbel proven-win completion): terminal children are
+    # seeded with their exact values at expansion, so a non-blocking move is
+    # refuted exactly on its first expansion and a proven win IS the target.
+    # Verified on the stuck iter-49 net @48 sims/mc=16: WIN target 0.61->1.00,
+    # BLOCK 0.30->0.66 (argmax 3/8->7/8). Low sims are enough by design (Gumbel);
+    # sims=64 is deliberate — high sims were a workaround, not the fix.
     return Connect4Config(
-        channels=48, blocks=4, iterations=200,
-        games_per_iter=64, n_workers=6, sims=48, eval_sims=128, max_considered=8,
-        buffer_size=60000, batch_size=256, train_steps=120,
-        lr=2e-3, entropy_coef=0.02, eval_every=5, eval_games=40,
+        channels=48, blocks=4, iterations=400, resume=False,
+        games_per_iter=128, n_workers=48, sims=64, eval_sims=64, max_considered=16,
+        buffer_size=200000, batch_size=512, train_steps=200,
+        lr=2e-3, entropy_coef=0.01, eval_every=5, eval_games=40,
         device=device, ckpt_dir="models/connect4", seed=0,
     )
 
