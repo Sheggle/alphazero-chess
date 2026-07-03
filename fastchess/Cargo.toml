@@ -1,0 +1,20 @@
+[package]
+name = "fastchess"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fastchess"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py312"] }
+numpy = { version = "0.22", features = ["half"] }
+shakmaty = "0.27"
+half = "2"
+rayon = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

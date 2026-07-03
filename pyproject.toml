@@ -1,0 +1,20 @@
+[project]
+name = "alphazero"
+version = "0.1.0"
+description = "AlphaZero reproduction, starting with tic-tac-toe"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "chess>=1.11.2",
+    "numpy>=2.4.6",
+    "torch>=2.12.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

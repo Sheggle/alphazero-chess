@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# trained model checkpoints and run logs
+models/
+scripts/*.log
+
+scratchpad_*.log
+
+models/
+
+# rust build artifacts
+fastchess/target/
+fastchess/pybuild/
+*.so
+
+chess_ui/server.log

@@ -1,0 +1,123 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Play the AlphaZero net</title>
+<link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; background:#1e1e22; color:#e8e8ea;
+         display:flex; flex-direction:column; align-items:center; padding:24px; }
+  h1 { font-weight:600; margin:0 0 4px; }
+  .sub { color:#9a9aa2; margin:0 0 18px; font-size:14px; }
+  #board { width:480px; box-shadow:0 8px 30px rgba(0,0,0,.5); border-radius:4px; }
+  .controls { margin:16px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  select, button { background:#2c2c33; color:#e8e8ea; border:1px solid #44444c; border-radius:6px;
+                   padding:7px 12px; font-size:14px; cursor:pointer; }
+  button.primary { background:#4a7dff; border-color:#4a7dff; font-weight:600; }
+  #status { margin-top:8px; font-size:16px; min-height:24px; font-weight:500; }
+  #thinking { color:#ffcf4a; }
+  .moves { margin-top:10px; width:480px; max-height:90px; overflow:auto; font-size:13px;
+           color:#9a9aa2; font-family:ui-monospace,monospace; line-height:1.5; }
+</style>
+</head>
+<body>
+  <h1>Play the net ♟</h1>
+  <p class="sub">A from-scratch AlphaZero chess net — ~3,500 self-play games on a Mac CPU. Material-aware; not a sharp tactician. Good luck.</p>
+  <div id="board"></div>
+  <div class="controls">
+    <label>You play
+      <select id="side">
+        <option value="w" selected>White</option>
+        <option value="b">Black</option>
+      </select>
+    </label>
+    <label>Strength
+      <select id="diff">
+        <option value="128">Fast (128 sims)</option>
+        <option value="512">Normal (512 sims)</option>
+        <option value="1024">Strong (1024 sims)</option>
+        <option value="2048" selected>Production (2048 / L=16)</option>
+      </select>
+    </label>
+    <button class="primary" onclick="newGame()">New game</button>
+  </div>
+  <div id="status"></div>
+  <div class="moves" id="moves"></div>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+<script>
+var game = new Chess();
+var board = null;
+var humanColor = 'w';
+var sims = 2048;
+var busy = false;
+
+function render() { document.getElementById('moves').textContent = game.pgn(); }
+
+function setStatus(msg) {
+  var el = document.getElementById('status');
+  if (msg) { el.innerHTML = '<span id="thinking">' + msg + '</span>'; return; }
+  var s = '';
+  if (game.in_checkmate())      s = (game.turn() === humanColor) ? 'Checkmate — you lose.' : 'Checkmate — you win! 🎉';
+  else if (game.in_stalemate()) s = 'Stalemate — draw.';
+  else if (game.in_draw())      s = 'Draw.';
+  else s = (game.turn() === humanColor ? 'Your move' : "Net's move") + (game.in_check() ? ' — check!' : '');
+  el.textContent = s;
+}
+
+function onDragStart(src, piece) {
+  if (busy || game.game_over()) return false;
+  if (game.turn() !== humanColor) return false;
+  if (piece[0] !== humanColor) return false;
+}
+
+function onDrop(src, target) {
+  var move = game.move({ from: src, to: target, promotion: 'q' });
+  if (move === null) return 'snapback';
+  render();
+  window.setTimeout(netMove, 200);
+}
+
+function onSnapEnd() { board.position(game.fen()); }
+
+function netMove() {
+  if (game.game_over()) { setStatus(); return; }
+  if (game.turn() === humanColor) return;
+  busy = true;
+  setStatus('Net is thinking…');
+  fetch('/api/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fen: game.fen(), sims: sims })
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (d.move) {
+      game.move({ from: d.move.slice(0, 2), to: d.move.slice(2, 4), promotion: d.move.slice(4) || 'q' });
+      board.position(game.fen());
+      render();
+    }
+    busy = false;
+    setStatus();
+  }).catch(function () { busy = false; setStatus('(server error — is play_server.py running?)'); });
+}
+
+function newGame() {
+  game = new Chess();
+  humanColor = document.getElementById('side').value;
+  sims = parseInt(document.getElementById('diff').value);
+  board.orientation(humanColor === 'w' ? 'white' : 'black');
+  board.position('start');
+  render();
+  setStatus();
+  if (game.turn() !== humanColor) window.setTimeout(netMove, 300);
+}
+
+board = Chessboard('board', {
+  draggable: true, position: 'start',
+  onDragStart: onDragStart, onDrop: onDrop, onSnapEnd: onSnapEnd,
+  pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
+});
+setStatus();
+</script>
+</body>
+</html>
