@@ -102,6 +102,7 @@ class Connect4Config:
     games_per_iter: int = 48
     n_workers: int = 6                  # <=1 runs self-play inline (no process pool)
     sims: int = 32
+    eval_sims: int = 0                  # 0 -> use `sims`; else stronger eval search
     max_considered: int = 8
     max_ply: int = 64
     c_visit: float = 50.0
@@ -157,6 +158,7 @@ def _greedy_move(evaluator, state, sims, mc, rng):
 
 def eval_vs(evaluator, opponent, cfg, rng, seed_offset=0):
     """Play cfg.eval_games vs `opponent`, alternating colors. Returns metrics."""
+    eval_sims = cfg.eval_sims or cfg.sims
     wins = draws = losses = 0
     for i in range(cfg.eval_games):
         net_is_p1 = (i % 2 == 0)
@@ -164,7 +166,7 @@ def eval_vs(evaluator, opponent, cfg, rng, seed_offset=0):
         while not g.is_terminal() and g.ply < cfg.max_ply:
             net_to_move = (g.to_play == 1) == net_is_p1
             if net_to_move:
-                a = _greedy_move(evaluator, g, cfg.sims, cfg.max_considered, rng)
+                a = _greedy_move(evaluator, g, eval_sims, cfg.max_considered, rng)
             else:
                 a = opponent.select(g)
             g = g.apply(a)
@@ -312,15 +314,15 @@ def train(cfg: Connect4Config):
 def _config(mode: str) -> Connect4Config:
     if mode == "smoke":
         return Connect4Config(channels=32, blocks=3, iterations=12, games_per_iter=24,
-                              n_workers=1, sims=24, max_considered=8, train_steps=60,
-                              batch_size=128, eval_every=3, eval_games=30,
+                              n_workers=1, sims=24, eval_sims=96, max_considered=8,
+                              train_steps=60, batch_size=128, eval_every=3, eval_games=30,
                               ckpt_dir="models/connect4_smoke")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return Connect4Config(
         channels=48, blocks=4, iterations=200,
-        games_per_iter=64, n_workers=6, sims=32, max_considered=8,
+        games_per_iter=64, n_workers=6, sims=48, eval_sims=128, max_considered=8,
         buffer_size=60000, batch_size=256, train_steps=120,
-        lr=2e-3, entropy_coef=0.01, eval_every=5, eval_games=40,
+        lr=2e-3, entropy_coef=0.02, eval_every=5, eval_games=40,
         device=device, ckpt_dir="models/connect4", seed=0,
     )
 
